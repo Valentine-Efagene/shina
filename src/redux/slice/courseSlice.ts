@@ -1,43 +1,46 @@
+import Airtable from "airtable";
 import { IStudent } from './../../interface/Student';
-import { ICourse } from './../../interface/Course';
+import { ICourse, ICourseHydrated } from './../../interface/Course';
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 
 interface ICourseState {
   courses: ICourse[];
   status: 'idle' | 'loading' | 'failed';
+  studentCourses: ICourseHydrated[];
 }
 
 const initialState: ICourseState = {
   courses: [],
-  status: 'idle'
+  status: 'idle',
+  studentCourses: []
 }
 
-const COURSES: ICourse[] = [
-  { name: 'C02301', students: [{ name: 'John' }, { name: 'Sandra' }, { name: 'Juniper' }] },
-  { name: 'C02302', students: [{ name: 'Sam' }, { name: 'Sandra' }, { name: 'Juniper' }] },
-  { name: 'C02303', students: [{ name: 'Ken' }, { name: 'Lucy' }, { name: 'Juniper' }] }
-]
+const base = new Airtable({ apiKey: process.env.REACT_APP_API_KEY }).base(
+  process.env.REACT_APP_BASE || ""
+);
 
-export const fetchAllCourses = createAsyncThunk('course/fetchAllCourses', async (name: string) => {
-  return COURSES
+export const fetchAllCourses = createAsyncThunk('course/fetchAllCourses', async () => {
+  let _courses: ICourse[] = []
+  await base("classes")
+    .select({ view: "Grid view" })
+    .eachPage((records: any, fetchNextPage: () => void) => {
+      _courses = records.map((record: { id: string, fields: { Name: string, Students: string[] } }) => { return { id: record.id, name: record.fields.Name, students: record.fields.Students } });
+      fetchNextPage();
+    });
+
+  return _courses
 })
 
-export const fetchStudentCourses = createAsyncThunk('course/fetchStudentCourses', async (student: IStudent | null) => {
-  if (student === null) {
+export const fetchStudentCourses = createAsyncThunk('course/fetchStudentCourses', async (_, { getState }): Promise<ICourseHydrated[]> => {
+  const { student: { currentStudent, students: _students }, course: { courses } } = getState() as { course: { courses: ICourse[] }, student: { currentStudent: IStudent, students: IStudent[] } }
+
+  if (!currentStudent) {
     return []
   }
 
-  const studentCourses = COURSES.filter((course) => {
-    for (let _student of course.students) {
-      if (_student.name.toUpperCase() === student.name.toUpperCase()) {
-        return true
-      }
-    }
-
-    return false
-  })
-
-  return studentCourses ? studentCourses : []
+  let selectedCourses: ICourse[] = courses.filter(course => course.students.includes(currentStudent.id))
+  const hydrated: ICourseHydrated[] = selectedCourses.map(course => { return { id: course.id, name: course.name, students: course.students.map(student => _students.find(std => std.id === student)) } })
+  return hydrated
 })
 
 const courseSlices = createSlice({
@@ -66,7 +69,7 @@ const courseSlices = createSlice({
         state.status = 'idle'
       })
       .addCase(fetchStudentCourses.fulfilled, (state, action) => {
-        state.courses = action.payload
+        state.studentCourses = action.payload
         state.status = 'failed'
       })
   }
